@@ -1,0 +1,34 @@
+
+*Etape 3: Création echantillon prealable a l ACM ;
+
+data profil_web_export;
+set profil_web_export;
+alea=uniform(0);
+run;
+
+proc sort data=profil_web_export;
+by alea;
+run;
+
+data wrk.cm_profilweb_ech;
+set profil_web_export (obs=10000);
+run;
+
+
+
+*Etape 4: ACM;
+
+proc corresp data= wrk.cm_profilweb_ech  dimens=20 outc=wrk.cm_profilweb_recupacm /*noprint*/;
+tables num_cli,/*connexion_mois source_web*/ typ_client montant_credit anciennete activite logmt sitfam tr_age revfyr assurance;
+run;
+
+*OU;
+
+proc corresp data= wrk.cm_profilweb_ech  dimens=20 outc=wrk.cm_profilweb_recupacm mca/*noprint*/;
+tables /*connexion_mois source_web*/ typ_client montant_credit anciennete activite logmt sitfam tr_age revfyr assurance;
+run;
+
+*On recupere la sortie de l'acm pour analyse des axes retenus;
+data wrk.cm_profilweb_analyse_acm (keep=_NAME_ Quality Mass Inertia  dim1-dim6 Contr1-Contr6 SqCos1-SqCos6);
+set wrk.cm_profilweb_recupacm (where=(_TYPE_='VAR'));
+run;

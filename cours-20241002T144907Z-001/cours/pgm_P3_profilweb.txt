@@ -1,0 +1,457 @@
+
+
+* Etape 5.1: Classification type CAH;
+
+	*Recuperation des coordonnees des individus sur lechantillon (phase prealable CAH);
+
+data wrk.cm_profilweb_recupacm (keep=num_cli dim1-dim20);
+set wrk.cm_profilweb_recupacm (where=(_TYPE_='OBS'));
+
+length num_cli $8.;
+
+num_cli=_NAME_;
+
+run;
+
+
+proc sort data=wrk.cm_profilweb_recupacm;
+by num_cli;
+run;
+
+proc sort data=wrk.cm_profilweb_ech;
+by num_cli;
+run;
+
+data wrk.cm_profilweb_recupacm_ech;
+merge wrk.cm_profilweb_recupacm (in=p1)
+      wrk.cm_profilweb_ech (in=p2);
+by num_cli;
+if p1 & p2;
+run;
+
+	* CAH sur echantillon ;
+
+proc cluster data=wrk.cm_profilweb_recupacm_ech method=ward outtree=wrk.cm_tree noprint ;
+var dim1-dim6;
+id num_cli;
+run;
+
+* Arbre hiérarchique;
+
+ods html file="seg_cah1.html";
+goptions device=gif;
+
+proc tree data=wrk.cm_tree graphics  horizontal;
+run;
+
+
+*****sprsq***** il mesure la perte dinertie interclasse provoquee en regroupant 2 classes, on choisit le creux apres un pic;
+proc sort data = wrk.cm_tree ;by _ncl_ ;run;
+
+data sprsq;
+set wrk.cm_tree;
+by _ncl_;
+if first._ncl_;
+keep _ncl_ _sprsq_;
+run;
+
+proc gplot data=sprsq gout=sprsq_cah1;
+where _ncl_<10 and _ncl_ ne 1;
+plot _sprsq_ *_ncl_;
+symbol1 i=join;
+run;quit;
+
+
+*****ccc***** on choisit le pic apres un creux si >2 alors bonne classif si <0 KO;
+proc sort data = wrk.cm_tree ;by _ncl_ ;run;
+
+data ccc;
+set wrk.cm_tree;
+by _ncl_;
+if first._ncl_;
+keep _ncl_ _ccc_;
+run;
+
+proc gplot data=ccc gout=ccc_cah1;
+where _ncl_<10 and _ncl_ ne 1;
+plot _ccc_ *_ncl_;
+symbol1 i=join;
+run;quit;
+
+
+	* Macro permettant de récupérer les résultats de la CAH à partir du fichier de sortie et du nombre de classes: permet de lire le contenu de chaque classe;
+
+%macro resu_cah (tabent=,nb=,ident=,tabvar=,lvar=,tabsort=,fictxt=);
+
+ods html file="seg_cah2.html";
+goptions device=gif;
+
+proc tree data=&tabent out=wrk.cm_cah nclusters=&nb noprint;
+run;
+
+data wrk.cm_cah;
+set wrk.cm_cah (rename=(_NAME_=&ident));
+run;
+
+proc sort data=wrk.cm_cah;
+by &ident;
+run;
+
+proc sort data=&tabvar;
+by &ident;
+run;
+
+data tabsort;
+merge wrk.cm_cah (in=p1)
+      &tabvar (in=p2);
+by &ident;
+run;
+
+%let nbvar=%eval(%length(&lvar)-%length(%sysfunc(compress(&lvar,' ')))+1);
+
+%do i=1 %to &nbvar;
+%let var=%scan(&lvar,&i);
+
+proc summary data=tabsort missing nway;
+class &var cluster;
+output out=sum_&var;
+run;
+
+proc sort data=sum_&var (keep=&var cluster _FREQ_);
+by &var;
+run;
+
+data wrk.sum_&var.2 (keep=variable modalite clust1-clust&nb);
+set sum_&var;
+by &var;
+
+length clust1-clust&nb 3 variable modalite $15;
+
+%do j=1 %to &nb;
+retain clust&j 0;
+%end;
+
+if first.&var then do;
+%do j=1 %to &nb;
+clust&j=0;
+%end;
+end;
+
+%do j=1 %to &nb;
+if cluster=&j then clust&j=_FREQ_;
+%end;
+
+if last.&var;
+
+variable="&var";
+modalite=&var;
+
+run;
+
+%end;
+
+data &tabsort;
+set %do i=1 %to &nbvar;%let var=%scan(&lvar,&i); wrk.sum_&var.2 %end;;
+run;
+
+filename fs "&fictxt..txt";
+
+data _NULL_;
+set &tabsort;
+file fs delimiter='|';
+
+put variable modalite clust1-clust&nb;
+run;
+
+
+%mend;
+
+
+%resu_cah (tabent=wrk.cm_tree,nb=6,ident=num_cli,tabvar=wrk.cm_profilweb_ech,
+lvar=typ_client montant_credit anciennete utilisation_credit logmt sitfam tr_age revfyr assurance
+,tabsort=wrk.cm_profilweb_resu_cah,fictxt=cm_profilweb_resu_cah);
+
+
+
+
+
+* Etape 5.2: Classification type Nuees Dynamiques;
+
+	* Nuées dynamiques sur echantillon ;
+
+proc fastclus data=wrk.cm_profilweb_recupacm maxclusters=6 out=wrk.cm_profilweb_nudyn
+              cluster=cluster noprint;
+     var dim1-dim6;
+    id num_cli;
+run;
+
+	* Macro permettant de récupérer les résultats de la nudyn à partir du fichier de sortie et du nombre de classes ;
+
+%macro resu_nudyn (tabent=,nb=,ident=,tabvar=,tabcomp=,lvar=,tabsort=,fictxt=);
+
+proc sort data=&tabent;
+by &ident;
+run;
+
+proc sort data=&tabvar;
+by &ident;
+run;
+
+data &tabcomp;
+merge &tabent (in=p1)
+      &tabvar (in=p2);
+by &ident;
+run;
+
+%let nbvar=%eval(%length(&lvar)-%length(%sysfunc(compress(&lvar,' ')))+1);
+
+%do i=1 %to &nbvar;
+%let var=%scan(&lvar,&i);
+
+proc summary data=&tabcomp missing nway;
+class &var cluster;
+output out=sum_&var;
+run;
+
+proc sort data=sum_&var (keep=&var cluster _FREQ_);
+by &var;
+run;
+
+data wrk.sum_&var.2 (keep=variable modalite clust1-clust&nb);
+set sum_&var;
+by &var;
+
+length clust1-clust&nb 3 variable modalite $15;
+
+%do j=1 %to &nb;
+retain clust&j 0;
+%end;
+
+if first.&var then do;
+%do j=1 %to &nb;
+clust&j=0;
+%end;
+end;
+
+%do j=1 %to &nb;
+if cluster=&j then clust&j=_FREQ_;
+%end;
+
+if last.&var;
+
+variable="&var";
+modalite=&var;
+
+run;
+
+%end;
+
+data &tabsort;
+set %do i=1 %to &nbvar;%let var=%scan(&lvar,&i); wrk.sum_&var.2 %end;;
+run;
+
+filename fs "&fictxt..txt";
+
+data _NULL_;
+set &tabsort;
+file fs delimiter='|';
+
+put variable modalite clust1-clust&nb;
+run;
+
+
+
+%mend;
+
+
+%resu_nudyn (tabent=wrk.cm_profilweb_nudyn,nb=6,ident=num_cli,tabvar=wrk.cm_profilweb_ech,tabcomp=wrk.cm_profilweb_comp_nudyn,
+lvar=typ_client montant_credit anciennete utilisation_credit logmt sitfam tr_age revfyr assurance
+,tabsort=wrk.cm_profilweb_resu_nudyn,fictxt=cm_profilweb_nudyn);
+
+
+
+
+* Etape 5.3: Classification type Methode Mixte;
+
+
+	* Classif Mixte ;
+		*Nuees dynamiques sur 100 classes;
+
+proc fastclus data=wrk.cm_profilweb_recupacm maxclusters=100 out=wrk.cm_profilweb_mix_a_100
+              cluster=classe mean=wrk.cm_profilweb_mix_b_100 noprint;
+     var dim1-dim6;
+    id num_cli;
+run;
+
+		*CAH sur la classification issue des nuees dynamiques;
+proc cluster data=wrk.cm_profilweb_mix_b_100 method=ward outtree=wrk.cm_profilweb_tree_mix_100 noprint ;
+var dim1-dim6;
+id classe;
+run;
+
+* Arbre hiérarchique;
+
+ods html file="seg_cah_mix.html";
+goptions device=gif;
+
+proc tree data=wrk.cm_profilweb_tree_mix_100 graphics  horizontal;
+run;
+
+*****sprsq***** il mesure la perte dinertie interclasse provoquee en regroupant 2 classes, on choisit le creux apres un pic;
+proc sort data = wrk.cm_profilweb_tree_mix_100 ;by _ncl_ ;run;
+
+data sprsq;
+set wrk.cm_profilweb_tree_mix_100;
+by _ncl_;
+if first._ncl_;
+keep _ncl_ _sprsq_;
+run;
+
+proc gplot data=sprsq gout=sprsq_cah_mix;
+where _ncl_<10 and _ncl_ ne 1;
+plot _sprsq_ *_ncl_;
+symbol1 i=join;
+run;quit;
+
+
+*****ccc***** on choisit le pic apres un creux si >2 alors bonne classif si <0 KO;
+proc sort data = wrk.cm_profilweb_tree_mix_100 ;by _ncl_ ;run;
+
+data ccc;
+set wrk.cm_profilweb_tree_mix_100;
+by _ncl_;
+if first._ncl_;
+keep _ncl_ _ccc_;
+run;
+
+proc gplot data=ccc gout=ccc_cah_mix;
+where _ncl_<10 and _ncl_ ne 1;
+plot _ccc_ *_ncl_;
+symbol1 i=join;
+run;quit;
+
+
+	* Macro permettant de récupérer les résultats de la Mixte à partir du fichier de sortie et du nombre de classes ;
+
+%macro resu_mixte (tabent=,nb=,ident=,ident2=,outfast=,tabvar=,lvar=,tabsort=,fictxt=);
+
+ods html file="seg_mixte.html";
+goptions device=gif;
+
+proc tree data=&tabent out=wrk.cm_profilweb_mix nclusters=&nb noprint;
+run;
+
+data wrk.cm_profilweb_mix;
+set wrk.cm_profilweb_mix;
+
+length &ident2 8;
+
+&ident2=_NAME_;
+
+run;
+
+proc sort data=wrk.cm_profilweb_mix;
+by &ident2;
+run;
+
+proc sort data=&outfast;
+by &ident2;
+run;
+
+data wrk.cm_profilweb_mix2;
+merge wrk.cm_profilweb_mix (in=p1) &outfast (in=p2 keep=&ident &ident2);
+by &ident2;
+if p1 & p2;
+run;
+
+proc sort data=wrk.cm_profilweb_mix2;
+by &ident;
+run;
+
+proc sort data=&tabvar;
+by &ident;
+run;
+
+data tabsort;
+merge wrk.cm_profilweb_mix2 (in=p1)
+      &tabvar (in=p2);
+by &ident;
+run;
+
+%let nbvar=%eval(%length(&lvar)-%length(%sysfunc(compress(&lvar,' ')))+1);
+
+%do i=1 %to &nbvar;
+%let var=%scan(&lvar,&i);
+
+proc summary data=tabsort missing nway;
+class &var cluster;
+output out=sum_&var;
+run;
+
+proc sort data=sum_&var (keep=&var cluster _FREQ_);
+by &var;
+run;
+
+data wrk.sum_&var.2 (keep=variable modalite clust1-clust&nb);
+set sum_&var;
+by &var;
+
+length clust1-clust&nb 3 variable modalite $15;
+
+%do j=1 %to &nb;
+retain clust&j 0;
+%end;
+
+if first.&var then do;
+%do j=1 %to &nb;
+clust&j=0;
+%end;
+end;
+
+%do j=1 %to &nb;
+if cluster=&j then clust&j=_FREQ_;
+%end;
+
+if last.&var;
+
+variable="&var";
+modalite=&var;
+
+run;
+
+%end;
+
+data &tabsort;
+set %do i=1 %to &nbvar;%let var=%scan(&lvar,&i); wrk.sum_&var.2 %end;;
+run;
+
+filename fs "&fictxt..txt";
+
+data _NULL_;
+set &tabsort;
+file fs delimiter='|';
+
+put variable modalite clust1-clust&nb;
+run;
+
+
+%mend;
+
+
+%resu_mixte (tabent=wrk.cm_profilweb_tree_mix_100,nb=6,ident=num_cli,ident2=classe,outfast=wrk.cm_profilweb_mix_a_100,tabvar=profil_web_export,
+lvar=typ_client montant_credit anciennete utilisation_credit logmt sitfam tr_age revfyr assurance
+,tabsort=wrk.cm_profilweb_resu_mix,fictxt=cm_profilweb_resu_mix100);
+
+
+
+
+* Etape 6: Modelisation de la classification choisie: regression logistique generalisee;
+
+proc logistic data=wrk.cm_profilweb_comp_nudyn;
+class typ_client montant_credit anciennete utilisation_credit logmt sitfam tr_age revfyr assurance;
+model cluster= typ_client montant_credit anciennete utilisation_credit logmt sitfam tr_age revfyr assurance/link=glogit;
+output out=wrk.cm_pred predprobs=(individual);
+score data=profil_web_export out=wrk.cm_class_nudyn5_5;
+run;
+
+proc freq data=wrk.cm_pred; table _from_*_into_/missing;run;
